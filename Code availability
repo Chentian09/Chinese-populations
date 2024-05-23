@@ -1,0 +1,14 @@
+#Species composition analysis
+metaphlan ${i}_1.fastq.gz,${i}_2.fastq.gz -s ${i}.sam.bz2 --bowtie2out ${i}.bowtie2.bz2 -o ${i}_profiled.tsv --nproc 32 --input_type fastq
+
+#Microbial metabolic pathway analysis
+humann --input ${i}.fastq.gz --output ${i}_output --threads 32 --remove-temp-output
+
+#ARGs annotation
+args_oap stage_one -i $i -o $i.result -f fastq.gz -t 24
+args_oap stage_two -i $i.result -t 24
+
+#Metagenomic quality control and processing
+fastp -i ${i}_1.fastq -I ${i}_2.fastq -o ${i}_clean.1.fastq -O ${i}_clean.2.fastq -z 5 -q 20 -u 30 -w 8 -h $i.html -j $i.json
+bowtie2 -x GCF_000001405.39_GRCh38.p13_genomic.fna -1 ${i}_clean.1.fastq -2 ${i}_clean.2.fastq -p 30 -S $i.sam --un-conc-gz $i.hostfree.fastq
+megahit -1 $i.hostfree.fastq.1.gz -2 $i.hostfree.fastq.2.gz -t 10 -o $i 
