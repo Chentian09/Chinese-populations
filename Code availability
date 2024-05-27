@@ -1,18 +1,39 @@
 #Metagenomic quality filtering
 fastp -i ${i}_1.fastq -I ${i}_2.fastq -o ${i}_clean.1.fastq -O ${i}_clean.2.fastq -z 5 -q 20 -u 30 -w 8 -h $i.html -j $i.json
-bowtie2 -x GCF_000001405.39_GRCh38.p13_genomic.fna -1 ${i}_clean.1.fastq -2 ${i}_clean.2.fastq -p 30 -S $i.sam --un-conc-gz $i.hostfree.fastq
+bowtie2 -x human_genomic.fna -1 ${i}_clean.1.fastq -2 ${i}_clean.2.fastq -p 30 -S $i.sam --un-conc-gz $i.hostfree.fastq
 
 #Species composition analysis
 metaphlan ${i}_1.fastq.gz,${i}_2.fastq.gz -s ${i}.sam.bz2 --bowtie2out ${i}.bowtie2.bz2 -o ${i}_profiled.tsv --nproc 32 --input_type fastq
+merge_metaphlan_tables.py *_profile.tsv > merged_abundance_table.txt
 
 #Microbial metabolic pathway analysis
 humann --input ${i}.fastq.gz --output ${i}_output --threads 32 --remove-temp-output
+awk -F '\t' 'FNR == NR { a[] = -bash; next } { print a[] t  }' ${i}_pathcoverage.tsv ${i}_pathabundance.tsv|awk -F '\t' ' > 0.5'|cut -f 1,3 >${i}_pathabundance_cov_0.5.tsv
+humann_renorm_table --input ${i}_pathabundance_cov_0.5.tsv --output ${i}_pathabundance_cov_0.5-cpm.tsv --units cpm
+humann_join_tables --input $OUTPUT_DIR --output humann_pathabundance.tsv --file_name pathabundance_cpm
 
 #ARGs annotation
 args_oap stage_one -i $i -o $i.result -f fastq.gz -t 24
 args_oap stage_two -i $i.result -t 24
 
 #Metagenomic assembly, genome binning and species-level clustering
-megahit -1 $i.hostfree.fastq.1.gz -2 $i.hostfree.fastq.2.gz -t 10 -o $i 
+megahit -1 $i.hostfree.fastq.1.gz -2 $i.hostfree.fastq.2.gz -t 10 -o $i.directory 
 metawrap binning -o $i.BINING  -t 32 -a $i.final.contigs.fa --metabat2 ${i}_1.fastq.gz ${i}_2.fastq.gz
+dRep dereplicate genome_directory --length 50000 --completeness 50 --contamination 5 --genomeInfo genomeInfo.csv --MASH_sketch 10000 --S_algorithm ANImf --P_ani 0.90 --S_ani 0.95 --cov_thresh 0.3 -p 32 -g *fa
 
+#Genome quality assessment
+checkm lineage_wf -x fa genomes/ checkm_output/ -f checkm_results.tsv --tab_table -t 8
+barrnap --kingdom bac -threads 8 $i.fa --reject 0.01 --evalue 1e-03 >$i.gff3
+tRNAscan-SE -B -o $i.out -m $i.stats  $i.fa
+
+#Genome annotation
+gtdbtk classify_wf --cpus 32 --genome_dir genome_directory --extension fa --out_dir GTDB_output --skip_ani_screen --keep_intermediates --pplacer_cpus 32
+diamond blastp -d CARD.dmnd -q genome.faa -e 1e-5 --subject-cover 90 --query-cover 90  --sensitive --max-target-seqs 1 --id 95  -f 6 -o ARG.m6
+diamond blastp -d VFDB.dmnd -q genome.faa -e 1e-5 --subject-cover 90 --query-cover 90  --sensitive --max-target-seqs 1 --id 90  -f 6 -o VFG.m6
+diamond blastp -d BacMet2.dmnd -q genome.faa -e 1e-5 --subject-cover 90 --query-cover 90  --sensitive --max-target-seqs 1 --id 80  -f 6 -o MRG.m6
+diamond blastp -q genome.faa --db mobileOG-db.dmnd --outfmt 6 stitle qtitle pident bitscore slen evalue qlen sstart send qstart qend -k 1 -o mobileOG.tsv -e 1e-5 --query-cover 90 --id 95
+
+#Gene redundancy analysis
+mmseqs createdb $i.fasta $i.DB
+mmseqs cluster $i.DB $i.DB_clu --cov-mode 0 -c 0.9 --min-seq-id 0.95 --threads 32
+mmseqs createtsv $i.DB $i.DB $i.DB_clu $i.clustered.tsv
